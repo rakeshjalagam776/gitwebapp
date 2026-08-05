@@ -1,0 +1,67 @@
+trigger:
+  branches:
+    include:
+      - rakesh
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  resourceGroup: 'GitHubGroup'
+  appServicePlan: 'GitHubApp'
+  appName: 'GitWebApp'
+
+steps:
+- checkout: self
+
+# Provision Azure resources (only runs first time, safe to keep)
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: 'GitWebApp'   # must match service connection name
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      set -e
+      az group create --name $(resourceGroup) --location centralus
+      az appservice plan create --name $(appServicePlan) --resource-group $(resourceGroup) --sku F1 --is-linux
+      az webapp create --resource-group $(resourceGroup) --plan $(appServicePlan) --name $(appName) --runtime "NODE|20-lts"
+
+# Install Node.js
+- task: NodeTool@0
+  inputs:
+    versionSpec: '20.x'
+  displayName: 'Install Node.js'
+
+# Install dependencies
+- script: |
+    npm install
+  displayName: 'Install dependencies'
+
+# Archive only app files (exclude .git, pipeline YAML, node_modules cache)
+- task: ArchiveFiles@2
+  inputs:
+    rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+    includeRootFolder: false
+    archiveType: 'zip'
+    archiveFile: '$(Build.ArtifactStagingDirectory)/drop.zip'
+    replaceExistingArchive: true
+    # Exclude unnecessary files
+    verbose: true
+    # Patterns to exclude
+    # (pipeline YAML, .git folder, Azure DevOps artifacts, etc.)
+    # node_modules is excluded because npm install runs on App Service
+    # If you want to deploy node_modules, remove this line
+    # but usually better to exclude
+    # Add more exclusions as needed
+    # Example:
+    # **/.git/**;**/azure-pipelines.yml;**/drop.zip;**/node_modules/**
+
+- publish: '$(Build.ArtifactStagingDirectory)/drop.zip'
+  artifact: drop
+
+# Deploy to Azure Web App
+- task: AzureWebApp@1
+  inputs:
+    azureSubscription: 'GitWebApp'
+    appName: '$(appName)'
+    package: '$(Build.ArtifactStagingDirectory)/drop.zip'
